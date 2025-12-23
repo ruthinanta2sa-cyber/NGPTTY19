@@ -10,11 +10,6 @@ import hashlib
 if not os.path.exists('slips'):
     os.makedirs('slips')
 
-# สร้างไฟล์ signature.png จำลองไว้เพื่อไม่ให้ error (ในการใช้งานจริง คุณควรเอาไฟล์รูปของคุณมาวางทับ)
-if not os.path.exists('signature.png'):
-    # (ส่วนนี้แค่สร้างไฟล์เปล่าๆ หรือคุณจะลบออกแล้วหาไฟล์รูปมาใส่เองก็ได้)
-    pass 
-
 def make_hashes(password):
     return hashlib.sha256(str.encode(password)).hexdigest()
 
@@ -28,10 +23,18 @@ def init_db():
     c = conn.cursor()
     
     # 1. ตาราง User (เพิ่ม column role)
-    # role: 'admin' (Chairman), 'user' (General)
     c.execute('''CREATE TABLE IF NOT EXISTS users
                  (id INTEGER PRIMARY KEY, username TEXT UNIQUE, password TEXT, role TEXT)''')
     
+    # --- ส่วนแก้ปัญหา Database เก่าไม่มี column role (Auto Fix) ---
+    try:
+        c.execute("SELECT role FROM users LIMIT 1")
+    except sqlite3.OperationalError:
+        # ถ้า Error แปลว่าไม่มี column role ให้เพิ่มเข้าไป
+        c.execute("ALTER TABLE users ADD COLUMN role TEXT")
+        conn.commit()
+    # -----------------------------------------------------------
+
     # 2. ตารางบุคคล
     c.execute('''CREATE TABLE IF NOT EXISTS personnel
                  (id INTEGER PRIMARY KEY, owner_id INTEGER, name TEXT, phone TEXT, address TEXT)''')
@@ -50,7 +53,7 @@ def generate_pdf(person_name, trans_data, start_date, end_date):
     pdf = FPDF()
     pdf.add_page()
     
-    # Font Setup (ต้องมีไฟล์ font หรือใช้ Arial)
+    # Font Setup
     if os.path.exists('THSarabunNew.ttf'):
         pdf.add_font('THSarabunNew', '', 'THSarabunNew.ttf', uni=True)
         pdf.set_font("THSarabunNew", size=16)
@@ -72,14 +75,10 @@ def generate_pdf(person_name, trans_data, start_date, end_date):
     
     total = 0
     for index, row in trans_data.iterrows():
-        # แปลงวันที่ให้สวยงาม
         date_show = str(row['date'].split()[0])
         pdf.cell(40, 10, txt=date_show, border=1, align='C')
         pdf.cell(40, 10, txt=f"{row['amount']:,.2f}", border=1, align='R')
-        
-        # จัดการ Note
         note_txt = str(row['note']) if row['note'] else "-"
-        # (กรณีภาษาไทยใน FPDF อาจต้องตัดคำระวังตกขอบ แต่ในตัวอย่างนี้แสดงแบบง่าย)
         pdf.cell(110, 10, txt=note_txt, border=1, align='L')
         pdf.ln()
         total += row['amount']
@@ -88,29 +87,21 @@ def generate_pdf(person_name, trans_data, start_date, end_date):
     pdf.cell(80, 10, txt="Grand Total", border=1, align='C')
     pdf.cell(110, 10, txt=f"{total:,.2f}", border=1, align='L')
     
-    # --- ส่วนลายเซ็น (Chairman Signature) ---
-    # 1. เว้นระยะห่างจากตารางลงมา
+    # --- ส่วนลายเซ็น (ปรับตำแหน่งให้ตรงเส้นปะ) ---
     pdf.ln(25) 
-
-    # เก็บตำแหน่ง Y เริ่มต้นของบรรทัดเส้นปะ
     line_y_position = pdf.get_y()
 
-    # 2. วาดเส้นปะ (ใช้ cell ความสูง 8 เพื่อความกระชับ)
-    pdf.cell(100, 8, txt="", ln=0) # ดันไปทางขวา
+    # วาดเส้นปะ
+    pdf.cell(100, 8, txt="", ln=0)
     pdf.cell(90, 8, txt="......................................................", ln=1, align='C')
 
-    # 3. วางรูปลายเซ็น (ถ้ามีไฟล์)
+    # วางรูปลายเซ็น (ถ้ามี)
     if os.path.exists('signature.png'):
-        # คำนวณตำแหน่ง Y ของรูปภาพ
-        # line_y_position คือระดับเดียวกับเส้นปะ
-        # ลบค่าออก (-) เพื่อขยับรูปขึ้นไปด้านบน
-        # **ลองปรับค่า -15 นี้ดูครับ** ถ้าอยากให้สูงขึ้นให้ลบเยอะขึ้น (เช่น -20) ถ้าต่ำลงให้ลบน้อยลง (เช่น -10)
+        # ปรับความสูงตรงนี้ (-15)
         image_y = line_y_position - 15 
-        
-        # x=138 คือตำแหน่งแนวนอน (กึ่งกลางเส้นปะ), w=32 คือความกว้างรูป
         pdf.image('signature.png', x=138, y=image_y, w=32)
 
-    # 4. เขียนข้อความบรรทัดถัดไป (Cursor จะอยู่ใต้เส้นปะโดยอัตโนมัติจากขั้นตอนที่ 2)
+    # ข้อความใต้ลายเซ็น
     pdf.cell(100, 8, txt="", ln=0)
     pdf.cell(90, 8, txt="( Authorized Signature )", ln=1, align='C')
     pdf.cell(100, 8, txt="", ln=0)
@@ -136,13 +127,9 @@ def main():
         menu = ["เข้าสู่ระบบ (Login)", "สมัครสมาชิกใหม่ (Register)"]
         choice = st.sidebar.selectbox("เลือกรายการ", menu)
     else:
-        # เมนูสำหรับคนล็อกอินแล้ว
         menu_list = ["หน้าหลัก", "จัดการรายชื่อ", "บันทึกธุรกรรม", "ออกรายงาน"]
-        
-        # **เพิ่มเมนูเฉพาะ Admin**
         if st.session_state["role"] == 'admin':
             menu_list.append("Admin Panel (จัดการสิทธิ์)")
-            
         menu_list.append("ออกจากระบบ (Logout)")
         choice = st.sidebar.selectbox(f"เมนู (User: {st.session_state['username']})", menu_list)
 
@@ -154,9 +141,7 @@ def main():
 
         if st.button("สมัครสมาชิก"):
             c = conn.cursor()
-            # **Logic กำหนด Role:** ถ้าชื่อ 'admin' ให้เป็น admin ทันที (เพื่อ setup ครั้งแรก) นอกนั้นเป็น user
             role = 'admin' if new_user.lower() == 'admin' else 'user'
-            
             try:
                 c.execute("INSERT INTO users (username, password, role) VALUES (?,?,?)", 
                           (new_user, make_hashes(new_password), role))
@@ -179,7 +164,11 @@ def main():
                 if check_hashes(password, data[0][2]):
                     st.session_state["user_id"] = data[0][0]
                     st.session_state["username"] = data[0][1]
-                    st.session_state["role"] = data[0][3] # เก็บ Role เข้า Session
+                    # ดัก Error กรณีข้อมูลเก่าไม่มี role
+                    try:
+                        st.session_state["role"] = data[0][3]
+                    except IndexError:
+                        st.session_state["role"] = "user"
                     st.rerun()
                 else:
                     st.warning("รหัสผ่านไม่ถูกต้อง")
@@ -195,14 +184,12 @@ def main():
 
     # --- SYSTEM FUNCTIONS (Logged In) ---
     elif st.session_state["user_id"] is not None:
-        
         my_id = st.session_state["user_id"]
         
         # 1. จัดการรายชื่อ
         if choice == "จัดการรายชื่อ":
             st.header("📇 จัดการรายชื่อลูกค้า/ลูกหนี้")
             col1, col2 = st.columns([1, 2])
-            
             with col1:
                 with st.form("new_person"):
                     name = st.text_input("ชื่อ-สกุล")
@@ -215,7 +202,6 @@ def main():
                         conn.commit()
                         st.success("บันทึกแล้ว")
                         st.rerun()
-            
             with col2:
                 my_people = pd.read_sql(f"SELECT name, phone, address FROM personnel WHERE owner_id={my_id}", conn)
                 st.dataframe(my_people, use_container_width=True)
@@ -224,16 +210,13 @@ def main():
         elif choice == "บันทึกธุรกรรม":
             st.header("💸 บันทึกการจ่ายเงิน")
             df_p = pd.read_sql(f"SELECT * FROM personnel WHERE owner_id={my_id}", conn)
-            
             if not df_p.empty:
                 col1, col2 = st.columns(2)
                 with col1:
                     p_name = st.selectbox("เลือกรายชื่อ", df_p['name'])
                     p_id = df_p[df_p['name'] == p_name]['id'].values[0]
-                    
                     amt = st.number_input("ยอดเงิน (บาท)", step=100.0)
                     note = st.text_input("รายละเอียด/หมายเหตุ")
-                    
                     if st.button("ยืนยันการบันทึก"):
                         c = conn.cursor()
                         c.execute("INSERT INTO transactions (person_id, amount, date, slip_path, note) VALUES (?,?,?,?,?)",
@@ -243,7 +226,7 @@ def main():
             else:
                 st.info("กรุณาเพิ่มรายชื่อในเมนู 'จัดการรายชื่อ' ก่อน")
 
-        # 3. ออกรายงาน (แก้ไขใหม่: เลือกรายการได้)
+        # 3. ออกรายงาน (เลือกรายการได้)
         elif choice == "ออกรายงาน":
             st.header("📄 ออกรายงานสรุปยอด (PDF)")
             df_p = pd.read_sql(f"SELECT * FROM personnel WHERE owner_id={my_id}", conn)
@@ -252,113 +235,27 @@ def main():
                 col1, col2 = st.columns(2)
                 with col1:
                     p_name = st.selectbox("เลือกบุคคลที่ต้องการออกรายงาน", df_p['name'])
-                    # ยังคงให้เลือกช่วงวันที่เพื่อกรองข้อมูลเบื้องต้นก่อน
                     start_d = st.date_input("ตั้งแต่วันที่")
                     end_d = st.date_input("ถึงวันที่")
                 
                 p_id = df_p[df_p['name'] == p_name]['id'].values[0]
-                
-                # Query ข้อมูล
                 query = f"SELECT * FROM transactions WHERE person_id={p_id}"
                 df_t = pd.read_sql(query, conn)
                 
                 if not df_t.empty:
-                    # แปลงวันที่เพื่อใช้กรอง
                     df_t['date_obj'] = pd.to_datetime(df_t['date'])
-                    
-                    # 1. กรองตามวันที่ก่อน (Filter Date)
                     mask = (df_t['date_obj'].dt.date >= start_d) & (df_t['date_obj'].dt.date <= end_d)
                     df_filtered = df_t.loc[mask].copy() 
                     
                     if not df_filtered.empty:
                         st.divider()
                         st.subheader("✅ เลือกรายการที่ต้องการพิมพ์")
-                        
-                        # 2. เพิ่มคอลัมน์ 'เลือก' เข้าไปในตาราง (ค่าเริ่มต้น True = เลือกทั้งหมด)
-                        df_filtered.insert(0, "เลือก", True)
+                        df_filtered.insert(0, "เลือก", True) # เพิ่มช่องติ๊กถูก
 
-                        # 3. แสดงตารางแบบแก้ไขได้ (Data Editor)
-                        # เราจะซ่อนคอลัมน์ที่ไม่จำเป็น (เช่น id, slip_path) และโชว์แค่ที่ต้องใช้
                         edited_df = st.data_editor(
                             df_filtered,
                             column_config={
-                                "เลือก": st.column_config.CheckboxColumn(
-                                    "พิมพ์?",
-                                    help="ติ๊กถูกเพื่อนำรายการนี้ไปออกรายงาน PDF",
-                                    default=True,
-                                ),
+                                "เลือก": st.column_config.CheckboxColumn("พิมพ์?", default=True),
                                 "date": st.column_config.TextColumn("วันที่"),
                                 "amount": st.column_config.NumberColumn("ยอดเงิน", format="%.2f บาท"),
-                                "note": st.column_config.TextColumn("รายการ/หมายเหตุ"),
-                                # ซ่อนคอลัมน์ระบบที่ไม่ต้องการแสดง
-                                "id": None,
-                                "person_id": None,
-                                "slip_path": None,
-                                "date_obj": None,
-                            },
-                            disabled=["date", "amount", "note"], # ห้ามแก้เนื้อหา แก้ได้แค่ Checkbox
-                            hide_index=True,
-                            use_container_width=True
-                        )
-
-                        # 4. กรองเอาเฉพาะแถวที่ผู้ใช้ติ๊กถูก (Check = True)
-                        selected_items = edited_df[edited_df["เลือก"] == True]
-
-                        # แสดงสรุปยอดที่จะพิมพ์
-                        total_print = selected_items['amount'].sum()
-                        st.info(f"รายการที่เลือก: {len(selected_items)} รายการ | รวมยอดเงิน: {total_print:,.2f} บาท")
-                        
-                        if st.button("ดาวน์โหลด PDF (ตามรายการที่เลือก)"):
-                            if len(selected_items) > 0:
-                                # ส่งเฉพาะ selected_items ไปสร้าง PDF
-                                # ฟังก์ชัน generate_pdf จะคำนวณยอดรวมใหม่จากรายการที่ส่งไปให้อัตโนมัติ
-                                f_name = generate_pdf(p_name, selected_items, str(start_d), str(end_d))
-                                with open(f_name, "rb") as f:
-                                    st.download_button("Download PDF", f, file_name=f_name)
-                            else:
-                                st.warning("กรุณาเลือกรายการอย่างน้อย 1 รายการ")
-                    else:
-                        st.warning("ไม่พบข้อมูลในช่วงวันที่ที่เลือก")
-                else:
-                    st.warning("ไม่พบประวัติธุรกรรมของบุคคลนี้")
-
-        # 4. Admin Panel (เฉพาะ Admin เท่านั้น)
-        elif choice == "Admin Panel (จัดการสิทธิ์)":
-            if st.session_state["role"] == 'admin':
-                st.header("🔑 ส่วนจัดการของผู้ดูแลระบบ (Chairman)")
-                st.write("จัดการสิทธิ์ผู้ใช้งานทั้งหมด")
-                
-                # โชว์รายชื่อ User ทั้งหมด
-                users_df = pd.read_sql("SELECT id, username, role FROM users", conn)
-                st.dataframe(users_df, use_container_width=True)
-                
-                st.divider()
-                st.subheader("แก้ไขสิทธิ์ผู้ใช้งาน")
-                
-                col_a, col_b, col_c = st.columns(3)
-                with col_a:
-                    user_to_edit = st.selectbox("เลือก User", users_df['username'])
-                with col_b:
-                    new_role = st.selectbox("เลือกสิทธิ์ใหม่", ["user", "admin"])
-                with col_c:
-                    st.write("") # จัดระยะ
-                    st.write("")
-                    if st.button("อัปเดตสิทธิ์"):
-                        if user_to_edit == st.session_state['username']:
-                            st.warning("ไม่สามารถเปลี่ยนสิทธิ์ตัวเองได้ในหน้านี้")
-                        else:
-                            c = conn.cursor()
-                            c.execute("UPDATE users SET role=? WHERE username=?", (new_role, user_to_edit))
-                            conn.commit()
-                            st.success(f"เปลี่ยนสิทธิ์ {user_to_edit} เป็น {new_role} เรียบร้อย")
-                            st.rerun()
-            else:
-                st.error("คุณไม่มีสิทธิ์เข้าถึงหน้านี้")
-        
-        elif choice == "หน้าหลัก":
-            st.info("ยินดีต้อนรับสู่ระบบ เลือกเมนูทางด้านซ้ายเพื่อเริ่มทำงาน")
-
-if __name__ == '__main__':
-    main()
-
-
+                                "note": st.column_config.TextColumn("
