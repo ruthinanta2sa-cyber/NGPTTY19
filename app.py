@@ -89,19 +89,32 @@ def generate_pdf(person_name, trans_data, start_date, end_date):
     pdf.cell(110, 10, txt=f"{total:,.2f}", border=1, align='L')
     
     # --- ส่วนลายเซ็น (Chairman Signature) ---
-    pdf.ln(30) # เว้นบรรทัด
-    
-    # ตรวจสอบว่ามีไฟล์รูปหรือไม่
+    # 1. เว้นระยะห่างจากตารางลงมา
+    pdf.ln(25) 
+
+    # เก็บตำแหน่ง Y เริ่มต้นของบรรทัดเส้นปะ
+    line_y_position = pdf.get_y()
+
+    # 2. วาดเส้นปะ (ใช้ cell ความสูง 8 เพื่อความกระชับ)
+    pdf.cell(100, 8, txt="", ln=0) # ดันไปทางขวา
+    pdf.cell(90, 8, txt="......................................................", ln=1, align='C')
+
+    # 3. วางรูปลายเซ็น (ถ้ามีไฟล์)
     if os.path.exists('signature.png'):
-        # x, y คือตำแหน่ง, w คือความกว้าง
-        pdf.image('signature.png', x=130, y=pdf.get_y(), w=40)
+        # คำนวณตำแหน่ง Y ของรูปภาพ
+        # line_y_position คือระดับเดียวกับเส้นปะ
+        # ลบค่าออก (-) เพื่อขยับรูปขึ้นไปด้านบน
+        # **ลองปรับค่า -15 นี้ดูครับ** ถ้าอยากให้สูงขึ้นให้ลบเยอะขึ้น (เช่น -20) ถ้าต่ำลงให้ลบน้อยลง (เช่น -10)
+        image_y = line_y_position - 15 
         
-    pdf.cell(100, 10, txt="", ln=0) # ดันไปขวา
-    pdf.cell(90, 10, txt="......................................................", ln=1, align='C')
-    pdf.cell(100, 10, txt="", ln=0)
-    pdf.cell(90, 10, txt="( Authorized Signature )", ln=1, align='C')
-    pdf.cell(100, 10, txt="", ln=0)
-    pdf.cell(90, 10, txt="Chairman / Admin", ln=1, align='C')
+        # x=138 คือตำแหน่งแนวนอน (กึ่งกลางเส้นปะ), w=32 คือความกว้างรูป
+        pdf.image('signature.png', x=138, y=image_y, w=32)
+
+    # 4. เขียนข้อความบรรทัดถัดไป (Cursor จะอยู่ใต้เส้นปะโดยอัตโนมัติจากขั้นตอนที่ 2)
+    pdf.cell(100, 8, txt="", ln=0)
+    pdf.cell(90, 8, txt="( Authorized Signature )", ln=1, align='C')
+    pdf.cell(100, 8, txt="", ln=0)
+    pdf.cell(90, 8, txt="Chairman / Admin", ln=1, align='C')
 
     filename = f"report_{datetime.now().strftime('%Y%m%d%H%M%S')}.pdf"
     pdf.output(filename)
@@ -310,3 +323,4 @@ def main():
 
 if __name__ == '__main__':
     main()
+
