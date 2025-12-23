@@ -19,21 +19,25 @@ def check_hashes(password, hashed_text):
     return False
 
 def init_db():
+    # เชื่อมต่อฐานข้อมูล
     conn = sqlite3.connect('data.db', check_same_thread=False)
     c = conn.cursor()
     
-    # 1. ตาราง User (เพิ่ม column role)
+    # 1. ตาราง User
     c.execute('''CREATE TABLE IF NOT EXISTS users
                  (id INTEGER PRIMARY KEY, username TEXT UNIQUE, password TEXT, role TEXT)''')
     
-    # --- ส่วนแก้ปัญหา Database เก่าไม่มี column role (Auto Fix) ---
+    # --- Auto Fix: ตรวจสอบและเพิ่ม column 'role' หากไม่มี ---
     try:
         c.execute("SELECT role FROM users LIMIT 1")
     except sqlite3.OperationalError:
-        # ถ้า Error แปลว่าไม่มี column role ให้เพิ่มเข้าไป
-        c.execute("ALTER TABLE users ADD COLUMN role TEXT")
-        conn.commit()
-    # -----------------------------------------------------------
+        # ถ้า Error แสดงว่าไม่มี column role ให้เพิ่มเข้าไป
+        try:
+            c.execute("ALTER TABLE users ADD COLUMN role TEXT")
+            conn.commit()
+        except sqlite3.OperationalError:
+            pass # กันเหนียว กรณีมีการเข้าถึงพร้อมกัน
+    # ----------------------------------------------------
 
     # 2. ตารางบุคคล
     c.execute('''CREATE TABLE IF NOT EXISTS personnel
@@ -87,7 +91,7 @@ def generate_pdf(person_name, trans_data, start_date, end_date):
     pdf.cell(80, 10, txt="Grand Total", border=1, align='C')
     pdf.cell(110, 10, txt=f"{total:,.2f}", border=1, align='L')
     
-    # --- ส่วนลายเซ็น (ปรับตำแหน่งให้ตรงเส้นปะ) ---
+    # --- ส่วนลายเซ็น ---
     pdf.ln(25) 
     line_y_position = pdf.get_y()
 
@@ -97,7 +101,6 @@ def generate_pdf(person_name, trans_data, start_date, end_date):
 
     # วางรูปลายเซ็น (ถ้ามี)
     if os.path.exists('signature.png'):
-        # ปรับความสูงตรงนี้ (-15)
         image_y = line_y_position - 15 
         pdf.image('signature.png', x=138, y=image_y, w=32)
 
@@ -129,9 +132,9 @@ def main():
     else:
         menu_list = ["หน้าหลัก", "จัดการรายชื่อ", "บันทึกธุรกรรม", "ออกรายงาน"]
         if st.session_state["role"] == 'admin':
-            menu_list.append("Admin Panel (จัดการสิทธิ์)")
+            menu_list.append("Admin Panel")
         menu_list.append("ออกจากระบบ (Logout)")
-        choice = st.sidebar.selectbox(f"เมนู (User: {st.session_state['username']})", menu_list)
+        choice = st.sidebar.selectbox(f"เมนู ({st.session_state['username']})", menu_list)
 
     # --- REGISTER ---
     if choice == "สมัครสมาชิกใหม่ (Register)":
@@ -164,7 +167,6 @@ def main():
                 if check_hashes(password, data[0][2]):
                     st.session_state["user_id"] = data[0][0]
                     st.session_state["username"] = data[0][1]
-                    # ดัก Error กรณีข้อมูลเก่าไม่มี role
                     try:
                         st.session_state["role"] = data[0][3]
                     except IndexError:
@@ -234,7 +236,7 @@ def main():
             if not df_p.empty:
                 col1, col2 = st.columns(2)
                 with col1:
-                    p_name = st.selectbox("เลือกบุคคลที่ต้องการออกรายงาน", df_p['name'])
+                    p_name = st.selectbox("เลือกบุคคล", df_p['name'])
                     start_d = st.date_input("ตั้งแต่วันที่")
                     end_d = st.date_input("ถึงวันที่")
                 
@@ -249,13 +251,40 @@ def main():
                     
                     if not df_filtered.empty:
                         st.divider()
-                        st.subheader("✅ เลือกรายการที่ต้องการพิมพ์")
-                        df_filtered.insert(0, "เลือก", True) # เพิ่มช่องติ๊กถูก
+                        st.subheader("✅ เลือกรายการที่จะพิมพ์")
+                        df_filtered.insert(0, "เลือก", True) 
 
+                        # ตรงนี้ที่เคยมีปัญหา Syntax Error ผมจัดรูปแบบใหม่ให้แล้วครับ
                         edited_df = st.data_editor(
                             df_filtered,
                             column_config={
                                 "เลือก": st.column_config.CheckboxColumn("พิมพ์?", default=True),
                                 "date": st.column_config.TextColumn("วันที่"),
-                                "amount": st.column_config.NumberColumn("ยอดเงิน", format="%.2f บาท"),
-                                "note": st.column_config.TextColumn("
+                                "amount": st.column_config.NumberColumn("ยอดเงิน", format="%.2f"),
+                                "note": st.column_config.TextColumn("หมายเหตุ"),
+                                "id": None, "person_id": None, "slip_path": None, "date_obj": None
+                            },
+                            disabled=["date", "amount", "note"],
+                            hide_index=True,
+                            use_container_width=True
+                        )
+
+                        selected_items = edited_df[edited_df["เลือก"] == True]
+                        total_print = selected_items['amount'].sum()
+                        st.info(f"รายการที่เลือก: {len(selected_items)} | รวมยอดเงิน: {total_print:,.2f} บาท")
+                        
+                        if st.button("ดาวน์โหลด PDF"):
+                            if len(selected_items) > 0:
+                                f_name = generate_pdf(p_name, selected_items, str(start_d), str(end_d))
+                                with open(f_name, "rb") as f:
+                                    st.download_button("Download PDF", f, file_name=f_name)
+                            else:
+                                st.warning("กรุณาเลือกอย่างน้อย 1 รายการ")
+                    else:
+                        st.warning("ไม่พบข้อมูลในช่วงวันที่นี้")
+                else:
+                    st.warning("ไม่พบประวัติธุรกรรม")
+
+        # 4. Admin Panel
+        elif choice == "Admin Panel":
+            if st.session_state["role"] == 'admin':
