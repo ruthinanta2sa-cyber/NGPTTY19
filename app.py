@@ -342,8 +342,16 @@ def main():
                         else: st.error("ข้อมูลไม่ครบ")
             else: st.warning("กรุณากรอกข้อมูลส่วนตัวก่อน")
 
+        # 3. HISTORY & RECEIPT (ฉบับแก้ไข: ปุ่มดาวน์โหลดใช้งานได้จริง)
         elif choice == "ประวัติ/ดาวน์โหลดใบเสร็จ":
             st.header("📜 ประวัติและใบเสร็จ")
+            
+            # ฟังก์ชันช่วยอัปเดตยอดโหลด (Callback)
+            def update_dl_count(tid):
+                c = conn.cursor()
+                c.execute("UPDATE transactions SET download_count = download_count + 1 WHERE id=?", (tid,))
+                conn.commit()
+
             c = conn.cursor()
             c.execute("SELECT * FROM personnel WHERE owner_id=?", (my_id,))
             prof = c.fetchone()
@@ -352,12 +360,17 @@ def main():
                 c.execute(f"SELECT * FROM transactions WHERE person_id={prof[0]} ORDER BY date DESC")
                 rows = c.fetchall()
                 if rows:
+                    # แสดงตารางรวม
                     df = pd.DataFrame(rows, columns=['id', 'pid', 'amount', 'date', 'path', 'note', 'cat', 'dl_count'])
                     st.dataframe(df[['date', 'cat', 'note', 'amount']], use_container_width=True)
+                    
                     st.divider()
                     st.subheader("📥 ดาวน์โหลด (รายรายการ)")
+                    
+                    # Loop สร้างปุ่มดาวน์โหลดแต่ละรายการ
                     for row in rows:
                         tid, _, amt, dt, path, note, cat, dl_count = row
+                        
                         with st.container(border=True):
                             c1, c2, c3 = st.columns([2, 1, 1])
                             with c1:
@@ -365,17 +378,33 @@ def main():
                                 st.caption(note)
                             with c2:
                                 st.write(f"**{amt:,.2f} บาท**")
-                                st.caption(f"โหลดแล้ว: {dl_count} ครั้ง")
+                                if dl_count == 0:
+                                    st.caption("✨ ยังไม่เคยโหลด (จะได้ต้นฉบับ)")
+                                else:
+                                    st.caption(f"⚠️ โหลดแล้ว {dl_count} ครั้ง (จะเป็นสำเนา)")
                             with c3:
-                                if st.button(f"📄 ใบเสร็จ", key=f"btn_{tid}"):
-                                    is_orig = True if dl_count == 0 else False
-                                    pdf_file = generate_receipt_pdf(tid, prof[2], dt, amt, cat, note, is_orig)
-                                    c.execute("UPDATE transactions SET download_count = download_count + 1 WHERE id=?", (tid,))
-                                    conn.commit()
-                                    with open(pdf_file, "rb") as f:
-                                        st.download_button("บันทึก PDF", f, file_name=pdf_file, key=f"dl_{tid}")
-                                    st.rerun()
-                else: st.info("ไม่พบประวัติ")
+                                # 1. เตรียมข้อมูล PDF ล่วงหน้า
+                                is_orig = True if dl_count == 0 else False
+                                pdf_filename = generate_receipt_pdf(tid, prof[2], dt, amt, cat, note, is_orig)
+                                
+                                # 2. อ่านไฟล์เป็น Bytes เพื่อใส่ในปุ่ม
+                                with open(pdf_filename, "rb") as f:
+                                    pdf_bytes = f.read()
+
+                                # 3. สร้างปุ่ม Download โดยตรง
+                                st.download_button(
+                                    label="📄 ดาวน์โหลดใบเสร็จ",
+                                    data=pdf_bytes,
+                                    file_name=pdf_filename,
+                                    mime="application/pdf",
+                                    key=f"dl_btn_{tid}",
+                                    on_click=update_dl_count, # สั่งให้ไปอัปเดต DB เมื่อกดปุ่ม
+                                    args=(tid,)
+                                )
+                else: 
+                    st.info("ไม่พบประวัติการชำระเงิน")
+            else:
+                st.warning("กรุณากรอกข้อมูลส่วนตัวก่อน")
 
         # --- ADMIN ZONES ---
         elif "Admin" in choice and st.session_state["role"] == 'admin':
@@ -400,3 +429,4 @@ def main():
 
 if __name__ == '__main__':
     main()
+
